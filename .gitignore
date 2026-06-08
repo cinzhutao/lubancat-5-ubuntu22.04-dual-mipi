@@ -1,0 +1,13 @@
+ubuntu-ebf-rk3588/build/
+ubuntu-ebf-rk3588/images/
+
+*.img
+*.img.gz
+*.zip
+*.tar
+*.tar.gz
+*.tar.xz
+*.log
+
+.agents/
+.codex/

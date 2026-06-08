@@ -1,0 +1,277 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Device Tree Overlay for LubanCat 5 v2 (RK3588) MIPI DSI OLED Display
+ *
+ * Based on verified Android 12 DTS configuration
+ * (rk3588-lubancat5-mipi-display.dts).
+ *
+ * Hardware:
+ *   - Dual-channel MIPI DSI (dsi0 master + dsi1 slave), 8 lanes total
+ *   - 2664x2880 OLED panel, 90Hz refresh
+ *   - Brightness via DCS 0x51 (DCS_SET_DISPLAY_BRIGHTNESS)
+ *   - RP2040 bridge board manages panel power/reset independently
+ *   - RK3588 GPIOs for reset/power/backlight are physically unconnected
+ *
+ * BSP Driver Format:
+ *   panel-init-sequence uses byte array with struct panel_cmd_header:
+ *   [data_type:1] [delay:1] [payload_length:1] [payload:N]
+ *   data_type values: 0x05=DCS_SHORT_WRITE, 0x15=DCS_SHORT_WRITE_PARAM,
+ *   0x39=DCS_LONG_WRITE, 0x0A=PICTURE_PARAMETER_SET (DSC PPS)
+ *
+ * Important: The Android DTS uses 32-bit cell format <...> which is
+ * NOT binary-compatible with the BSP driver's byte-level parser.
+ * The init sequence below has been correctly translated to byte-array
+ * format that matches the BSP panel_simple_parse_cmd_seq() function.
+ */
+
+/dts-v1/;
+/plugin/;
+
+/*
+ * Literal GPIO values (no header includes needed):
+ *   GPIO_ACTIVE_HIGH = 0, GPIO_ACTIVE_LOW = 1
+ *   IRQ_TYPE_LEVEL_LOW = 8
+ *   RK_PA4 = 1*32+4 = 36 (= gpio1 4)
+ *   RK_PB3 = 1*32+11 = 43 (= gpio1 11)
+ *   RK_PB4 = 1*32+12 = 44 (= gpio1 12)
+ */
+
+/ {
+	compatible = "embedfire,rk3588-lubancat-5-v2", "rockchip,rk3588";
+};
+
+/* ===== Dummy always-on regulator =====
+ * Panel power is managed by RP2040. This dummy regulator exists only
+ * to satisfy panel-simple-dsi driver probe requirements.
+ */
+&{/} {
+	vcc_mipi_dsi0: mipi-dsi0-power-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "mipi_dsi0_power";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		enable-active-high;
+		regulator-boot-on;
+		regulator-always-on;
+		status = "okay";
+	};
+
+	dummy_backlight_oled: backlight-oled {
+		compatible = "pwm-backlight";
+		pwms = <&pwm0 0 25000 0>;
+		brightness-levels = <0 255>;
+		default-brightness-level = <255>;
+		status = "okay";
+	};
+};
+
+/* ===== PWM0 for dummy backlight ===== */
+&pwm0 {
+	pinctrl-0 = <&pwm0m0_pins>;
+	status = "okay";
+};
+
+/* ===== VOP route: bind DSI0 to VP2, matching this SDK's DSI overlays ===== */
+&route_dsi0 {
+	status = "okay";
+	connect = <&vp2_out_dsi0>;
+};
+
+&dsi0_in_vp2 {
+	status = "okay";
+};
+
+/* ===== DSI0: Primary MIPI DSI controller with OLED panel ===== */
+&dsi0 {
+	status = "okay";
+	rockchip,dual-channel = <&dsi1>;
+	rockchip,lane-rate = <1250000>;	/* 1.25 Gbps/lane, matches Android */
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	dsi0_panel: panel@0 {
+		status = "okay";
+		compatible = "simple-panel-dsi";
+		reg = <0>;
+
+		/* bpc fallback chain for BSP driver */
+		bpc = <8>;
+		bits-per-component = <8>;
+		rockchip,bpc = <8>;
+
+		/* Dummy power supply - RP2040 handles real power */
+		power-supply = <&vcc_mipi_dsi0>;
+
+		/*
+		 * Dummy reset GPIO (gpio1 RK_PA4, active low).
+		 * This pin is NOT physically connected to the panel.
+		 * RP2040 handles the real reset. The driver requires
+		 * reset-gpios to probe successfully.
+		 */
+		reset-gpios = <&gpio1 4 1>;	/* RK_PA4, ACTIVE_LOW */
+
+		/* Timing delays - matched to Android DTS */
+		enable-delay-ms = <35>;		/* Android: 0x23 */
+		prepare-delay-ms = <6>;		/* Android: 0x06 */
+		reset-delay-ms = <2000>;		/* Android: 0x0a */
+		init-delay-ms = <3000>;		/* Android: 0xbb8 */
+		unprepare-delay-ms = <0>;
+		disable-delay-ms = <20>;	/* Android: 0x14 */
+
+		size,width = <74>;		/* Android: 0x4a (74mm) */
+		size,height = <133>;		/* Android: 0x85 (133mm) */
+
+		dsi,flags = <0xc03>;		/* VIDEO|BURST|NON_CONTINUOUS|LPM|EOT */
+		dsi,format = <0>;		/* MIPI_DSI_FMT_RGB888 */
+		dsi,lanes = <8>;		/* 8 total lanes in dual-channel */
+
+		/*
+		 * Panel init sequence - translated from Android DTS to
+		 * BSP byte-array format [data_type delay payload_length payload...]
+		 *
+		 * Sequence:
+		 *   1. Page select (B0 00, FF xx) - switch register pages
+		 *   2. B1 register config - panel timing parameters
+		 *   3. CC register config - panel control settings
+		 *   4. EC register config
+		 *   5. Page restore (FF 00)
+		 *   6. Address mode (36 02)
+		 *   7. Brightness max (51 FF FF) - OLED DCS brightness
+		 *   8. Register 65 = 90
+		 *   9. DSC PPS (Picture Parameter Set) - 128 bytes
+		 *   10. Page restore (FF 00, B0 00)
+		 *   11. Sleep Out (11) - exit sleep mode
+		 *   12. Display On (29) - turn on display
+		 */
+		panel-init-sequence = [
+			/* Page select */
+			39 00 02 B0 00
+			39 00 02 FF 00
+			/* B1 register - 28 bytes panel timing */
+			39 00 1C B1 00 18 18 00 18 18 00 18 18 00 18 18 00 18 18 00 18 18 00 18 18 00 18 18 00 18 18
+			/* Switch to page 1 */
+			39 00 02 FF 01
+			/* CC register - 37 bytes panel control */
+			39 00 25 CC 8D E0 01 32 32 32 32 32 32 32 32 32 00 49 81 2C 00 40 00 08 0C 00 40 40 00 00 00 00 00 00 00 02 00 FF FF FF
+			/* EC register */
+			39 00 02 FF 01
+			39 00 02 EC 20
+			/* Back to page 0 */
+			39 00 02 FF 00
+			/* Address mode, brightness, register 65 */
+			39 00 02 03 01
+			39 00 02 36 02
+			39 00 03 51 FF FF
+			39 00 02 65 90
+			/* DSC PPS - 128 bytes */
+			39 00 02 FF 01
+			0A 00 80
+			12 00 00 AB 30 80 0B 40 0A 68 05 A0 02 9A 02 9A
+			02 00 02 A1 00 20 85 EE 00 09 00 0F 00 16 00 0F
+			18 00 10 F0 07 10 20 00 06 0F 0F 33 0E 1C 2A 38
+			46 54 62 69 70 77 79 7B 7D 7E 02 02 22 00 2A 40
+			2A BE 3A FC 3A FA 3A F8 3B 38 3B 78 3B B6 4B B6
+			4B F4 4B F4 6C 34 84 74 00 00 00 00 00 00 00 00
+			00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+			00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+			/* Restore page 0, set B0 */
+			39 00 02 FF 00
+			39 00 02 B0 00
+			/* Sleep Out (DCS 0x11), 120ms delay */
+			39 78 01 11
+			/* Display On (DCS 0x29), no delay */
+			39 00 01 29
+		];
+
+		panel-exit-sequence = [
+			05 78 01 28	/* Display Off (DCS 0x28), 120ms delay */
+			05 00 01 10	/* Sleep In (DCS 0x10), no delay */
+		];
+
+		compressed-data;
+		slice-width = <666>;		/* Android: 0x29a */
+		slice-height = <1440>;		/* Android: 0x5a0 */
+		version-major = <1>;
+		version-minor = <1>;
+
+		display-timings {
+			native-mode = <&dsi0_timing0>;
+
+			dsi0_timing0: timing0 {
+				/* Pixel clock: 855,638,528 Hz (Android: 0x33058600) */
+				clock-frequency = <855638528>;
+				hactive = <2664>;	/* Android: 0xa68 */
+				vactive = <2880>;	/* Android: 0xb40 */
+				hback-porch = <200>;	/* Android: 0xc8 */
+				hfront-porch = <400>;	/* Android: 0x190 */
+				hsync-len = <4>;
+				vback-porch = <10>;	/* Android: 0x0a */
+				vfront-porch = <30>;	/* Android: 0x1e */
+				vsync-len = <1>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <0>;
+				pixelclk-active = <0>;
+			};
+		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in_dsi0: endpoint {
+					remote-endpoint = <&dsi0_out_panel>;
+				};
+			};
+		};
+	};
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+			dsi0_out_panel: endpoint {
+				remote-endpoint = <&panel_in_dsi0>;
+			};
+		};
+	};
+};
+
+/* ===== DSI1: Secondary DSI for dual-channel mode ===== */
+&dsi1 {
+	status = "okay";
+};
+
+/* ===== D-PHY: MIPI physical layer ===== */
+&mipi_dcphy0 {
+	status = "okay";
+};
+
+&mipi_dcphy1 {
+	status = "okay";
+};
+
+/* ===== Goodix GT911 Touch Controller on I2C1 ===== */
+&i2c1 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c1m2_xfer>;
+
+	gt911_dsi0: gt911@5d {
+		status = "okay";
+		compatible = "goodix,gt911";
+		reg = <0x5d>;
+		interrupt-parent = <&gpio1>;
+		interrupts = <11 8>;			/* RK_PB3, IRQ_TYPE_LEVEL_LOW */
+		reset-gpios = <&gpio1 12 1>;		/* RK_PB4, ACTIVE_LOW */
+		irq-gpios = <&gpio1 11 0>;		/* RK_PB3, ACTIVE_HIGH */
+		touchscreen-inverted-x = <1>;
+		touchscreen-inverted-y = <1>;
+	};
+};
