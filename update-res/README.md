@@ -24,7 +24,7 @@
   - 目的是让 2664x2880 OLED 模式和 855.638528 MHz 像素时钟通过 DRM/VOP2 校验。
 
 - `scripts/build-rootfs.sh`
-  - 修复 Ubuntu 22.04 宿主机构建 Ubuntu 24.04 rootfs 时的 chroot heredoc 展开问题。
+  - 修复在旧版宿主环境中构建本 Ubuntu 24.04 SDK rootfs 时的 chroot heredoc 展开问题。
   - 让 `check-language-support` 在目标 arm64 rootfs 内执行，而不是在宿主机提前执行。
   - 没有额外语言包时跳过安装，避免空参数或宿主机环境差异导致构建失败。
 

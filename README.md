@@ -1,7 +1,7 @@
-# LubanCat 5 Ubuntu 22.04 双路 MIPI OLED 点屏记录
+# LubanCat 5 Ubuntu 24.04 双路 MIPI OLED 点屏记录
 
 这个仓库保存了 LubanCat 5 V2 在野火 EBF RK3588 Ubuntu SDK 上成功点亮双路
-MIPI OLED 屏幕的完整源码树和最小修改集。
+MIPI OLED 屏幕的 Ubuntu 24.04 SDK 完整源码树和最小修改集。
 
 本次成功点亮的核心不是重新给 RP2040 上电，而是修正 Linux 内核接手后的显示链路：
 设备树启用 DSI0 + DSI1 双通道 MIPI，显示路由走 VP2，同时放宽 RK3588 VP2 的显示时钟
@@ -37,7 +37,7 @@ MIPI OLED 屏幕的完整源码树和最小修改集。
   - 这样 2664x2880 OLED 模式及 855.638528 MHz 像素时钟可以通过 DRM/VOP2 模式校验。
 
 - `ubuntu-ebf-rk3588/scripts/build-rootfs.sh`
-  - 修复 Ubuntu 22.04 宿主机构建 Ubuntu 24.04 rootfs 时的兼容问题。
+  - 修复在旧版宿主环境中构建本 Ubuntu 24.04 SDK rootfs 时的兼容问题。
   - 使用带引号 heredoc，避免宿主机提前展开 chroot 内部命令。
   - 让 `check-language-support` 在目标 arm64 rootfs 内执行，并在没有额外语言包时跳过安装。
 
@@ -46,7 +46,7 @@ MIPI OLED 屏幕的完整源码树和最小修改集。
 进入 SDK 目录后构建：
 
 ```bash
-cd /home/zhutao/mipi/lubancat-5-ubuntu22.04-dual-mipi/ubuntu-ebf-rk3588
+cd /home/zhutao/mipi/lubancat-5-ubuntu24.04-dual-mipi/ubuntu-ebf-rk3588
 ```
 
 常用构建命令示例：
